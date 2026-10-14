@@ -1,13 +1,14 @@
 name: Build ANIKA PDF APK
 
 on:
-  workflow_dispatch:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 jobs:
   build:
+    name: Build Android APK
     runs-on: ubuntu-latest
 
     steps:
@@ -22,19 +23,35 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: 12266719
 
-      - name: Check Gradle wrapper
+      - name: Check project files
         run: |
-          if [ ! -f gradlew ]; then
-            echo "ERROR: gradlew file is missing from project root."
+          echo "Checking ANIKA PDF project..."
+          ls -la
+          test -f settings.gradle.kts || {
+            echo "ERROR: settings.gradle.kts is missing"
             exit 1
-          fi
-          chmod +x gradlew
+          }
+          test -f build.gradle.kts || {
+            echo "ERROR: build.gradle.kts is missing"
+            exit 1
+          }
+          test -d app || {
+            echo "ERROR: app folder is missing"
+            exit 1
+          }
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
 
       - name: Build Debug APK
-        run: ./gradlew assembleDebug
+        run: |
+          gradle assembleDebug --stacktrace
 
       - name: Upload APK
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: ANIKA-PDF-APK
