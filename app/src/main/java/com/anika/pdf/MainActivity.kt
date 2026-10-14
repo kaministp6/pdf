@@ -78,6 +78,8 @@ private fun AnikaPdfApp() {
     var outputImageUri by remember { mutableStateOf<Uri?>(null) }
     var pagePreview by remember { mutableStateOf<Bitmap?>(null) }
     var overlayText by remember { mutableStateOf("") }
+    var findText by remember { mutableStateOf("") }
+    var replaceText by remember { mutableStateOf("") }
 
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
         if (uris.isNotEmpty()) { selectedImages = uris; status = "${uris.size} image(s) selected." }
@@ -287,6 +289,29 @@ private fun AnikaPdfApp() {
                                 OutlinedButton(onClick = { if (pageToOcr > 0) pageToOcr-- }, enabled = pageToOcr > 0 && !busy, modifier = Modifier.weight(1f)) { Text("Previous") }
                                 OutlinedButton(onClick = { if (pageToOcr < pdfPageCount - 1) pageToOcr++ }, enabled = pageToOcr < pdfPageCount - 1 && !busy, modifier = Modifier.weight(1f)) { Text("Next") }
                             }
+                            Text("Replace existing text (OCR-based)", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Ink)
+                            Text("Find text on this page, cover its detected area and draw replacement text. Best for clear printed text; output becomes image-based and font matching is approximate.", style = MaterialTheme.typography.bodySmall, color = Color(0xFF666477))
+                            OutlinedTextField(value = findText, onValueChange = { findText = it }, modifier = Modifier.fillMaxWidth(), label = { Text("Existing text to find") }, singleLine = true)
+                            OutlinedTextField(value = replaceText, onValueChange = { replaceText = it }, modifier = Modifier.fillMaxWidth(), label = { Text("Replacement text (Hindi / English)") }, minLines = 1)
+                            Button(onClick = {
+                                val uri = selectedPdf!!
+                                val pageIndex = pageToOcr
+                                val old = findText.trim()
+                                val replacement = replaceText
+                                if (old.isBlank() || replacement.isBlank()) {
+                                    status = "Enter both the existing text and replacement text."
+                                } else {
+                                    busy = true; status = "Finding text and creating edited copy…"
+                                    scope.launch {
+                                        try {
+                                            val result = withContext(Dispatchers.IO) { context.replaceTextByOcr(uri, pageIndex, old, replacement) }
+                                            status = result
+                                        } catch (e: Exception) {
+                                            status = "Text replacement failed: ${e.localizedMessage ?: "unknown error"}"
+                                        } finally { busy = false }
+                                    }
+                                }
+                            }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("Replace text and save edited PDF") }
                             OutlinedTextField(
                                 value = overlayText,
                                 onValueChange = { overlayText = it },
@@ -439,7 +464,7 @@ private fun AnikaPdfApp() {
                     }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("Export OCR text as PDF") }
                 }
 
-                Text("This is an MVP source project. Direct editing of existing PDF text, universal font recognition, DOCX/XLSX conversion, PDF merge/split/compress, and AI background repair are not implemented yet. OCR may make mistakes; always review results.",
+                Text("Existing-text replacement is OCR-based and image-based; exact original font, selectable text, complex backgrounds and layout cannot be guaranteed. OCR may make mistakes; inspect the saved copy. This is not native PDF text-object editing.",
                     style = MaterialTheme.typography.bodySmall, color = Color(0xFF666477))
             }
         }
@@ -844,4 +869,74 @@ private fun Context.exportPdfWithTextOverlay(uri: Uri, targetPageIndex: Int, ove
     } finally {
         output.close()
     }
+}
+
+
+/**
+ * Best-effort visual replacement: OCR locates a matching text line, masks that area,
+ * then draws the replacement and exports an image-based copy. It does not alter native
+ * PDF text objects and cannot guarantee the original font or complex background.
+ */
+private suspend fun Context.replaceTextByOcr(uri: Uri, targetPageIndex: Int, oldText: String, newText: String): String = withContext(Dispatchers.IO) {
+    val output = PdfDocument()
+    try {
+        val pfd = contentResolver.openFileDescriptor(uri, "r") ?: error("Could not open PDF.")
+        pfd.use { descriptor ->
+            PdfRenderer(descriptor).use { renderer ->
+                require(targetPageIndex in 0 until renderer.pageCount) { "Selected page is out of range." }
+                var found = false
+                for (index in 0 until renderer.pageCount) {
+                    renderer.openPage(index).use { sourcePage ->
+                        val scale = minOf(2.5f, 2000f / sourcePage.width.coerceAtLeast(1))
+                        val bitmap = Bitmap.createBitmap((sourcePage.width * scale).toInt().coerceAtLeast(1), (sourcePage.height * scale).toInt().coerceAtLeast(1), Bitmap.Config.ARGB_8888)
+                        try {
+                            bitmap.eraseColor(AndroidColor.WHITE)
+                            sourcePage.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                            if (index == targetPageIndex) {
+                                val input = InputImage.fromBitmap(bitmap, 0)
+                                val latin = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+                                val devanagari = TextRecognition.getClient(DevanagariTextRecognizerOptions.Builder().build())
+                                val blocks = try {
+                                    val a = runCatching { latin.process(input).await().textBlocks }.getOrDefault(emptyList())
+                                    val b = runCatching { devanagari.process(input).await().textBlocks }.getOrDefault(emptyList())
+                                    (a + b).distinctBy { it.text to it.boundingBox?.toShortString() }
+                                } finally { latin.close(); devanagari.close() }
+                                val match = blocks.firstOrNull { block ->
+                                    block.boundingBox != null && block.text.contains(oldText, ignoreCase = true)
+                                } ?: error("Text not found by OCR on this page. Try a shorter, clearly visible phrase.")
+                                val rect = android.graphics.RectF(match.boundingBox!!)
+                                val canvas = Canvas(bitmap)
+                                val pad = (rect.height() * 0.12f).coerceAtLeast(2f)
+                                rect.inset(-pad, -pad)
+                                canvas.drawRect(rect, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = AndroidColor.WHITE; style = Paint.Style.FILL })
+                                val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                                    color = AndroidColor.BLACK
+                                    textSize = (rect.height() * 0.78f).coerceIn(12f, 96f)
+                                    typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL)
+                                }
+                                val maxWidth = rect.width()
+                                var size = paint.textSize
+                                while (paint.measureText(newText) > maxWidth && size > 8f) { size -= 1f; paint.textSize = size }
+                                val x = rect.left + pad
+                                val y = rect.centerY() - (paint.ascent() + paint.descent()) / 2f
+                                canvas.drawText(newText, x, y, paint)
+                                found = true
+                            }
+                            val page = output.startPage(PdfDocument.PageInfo.Builder(595, 842, index + 1).create())
+                            val fit = minOf(595f / bitmap.width, 842f / bitmap.height)
+                            val w = bitmap.width * fit; val h = bitmap.height * fit
+                            val dst = RectF((595f - w) / 2f, (842f - h) / 2f, (595f + w) / 2f, (842f + h) / 2f)
+                            page.canvas.drawColor(AndroidColor.WHITE)
+                            page.canvas.drawBitmap(bitmap, null, dst, Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
+                            output.finishPage(page)
+                        } finally { if (!bitmap.isRecycled) bitmap.recycle() }
+                    }
+                }
+                if (!found) error("No matching text was replaced.")
+            }
+        }
+        val name = "ANIKA_TEXT_REPLACED_${timestamp()}.pdf"
+        savePdfDocument(output, name)
+        "Replacement saved to Downloads/$name. Note: this is an image-based copy; original font/layout are only approximated."
+    } finally { output.close() }
 }
