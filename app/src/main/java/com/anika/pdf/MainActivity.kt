@@ -50,9 +50,10 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-private val Ink = Color(0xFF25234A)
-private val Violet = Color(0xFF6558D3)
-private val Pale = Color(0xFFF5F4FC)
+private val Ink = Color(0xFF111827)
+private val Violet = Color(0xFF3157D5)
+private val Pale = Color(0xFFF3F6FB)
+private val Accent = Color(0xFF13A89E)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -126,13 +127,13 @@ private fun AnikaPdfApp() {
         }
     }
 
-    MaterialTheme(colorScheme = lightColorScheme(primary = Violet, secondary = Color(0xFF12A6A1), background = Pale, surface = Color.White)) {
+    MaterialTheme(colorScheme = lightColorScheme(primary = Violet, secondary = Accent, background = Pale, surface = Color.White)) {
         Scaffold(
             topBar = {
                 TopAppBar(title = {
                     Column {
                         Text("ANIKA PDF", fontWeight = FontWeight.ExtraBold, color = Ink)
-                        Text("AI Professional Document Studio", style = MaterialTheme.typography.labelSmall, color = Violet)
+                        Text("PDF • EDIT • CONVERT", style = MaterialTheme.typography.labelSmall, color = Violet, fontWeight = FontWeight.Bold)
                     }
                 }, colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.White))
             },
@@ -142,20 +143,31 @@ private fun AnikaPdfApp() {
                 Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                Card(shape = RoundedCornerShape(24.dp), colors = CardDefaults.cardColors(containerColor = Ink), modifier = Modifier.fillMaxWidth()) {
+                Card(shape = RoundedCornerShape(28.dp), colors = CardDefaults.cardColors(containerColor = Violet), modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(22.dp)) {
-                        Text("Every Document.\nOne Powerful Editor.", color = Color.White, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                        Text("Your documents.\nUnder your control.", color = Color.White, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.ExtraBold)
                         Spacer(Modifier.height(8.dp))
-                        Text("PDF tools, image conversion and Hindi/English OCR in one workspace.", color = Color(0xFFE2E0FF))
-                        Spacer(Modifier.height(12.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            AssistChip(onClick = { imagePicker.launch("image/*") }, label = { Text("Choose images") })
-                            AssistChip(onClick = { pdfPicker.launch("application/pdf") }, label = { Text("Open PDF") })
+                        Text("Create, organize and convert PDFs with Hindi & English OCR.", color = Color(0xFFE8ECFF), style = MaterialTheme.typography.bodyLarge)
+                        Spacer(Modifier.height(18.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Button(onClick = { pdfPicker.launch("application/pdf") }, colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Violet), shape = RoundedCornerShape(14.dp)) { Text("＋ Open PDF", fontWeight = FontWeight.Bold) }
+                            OutlinedButton(onClick = { imagePicker.launch("image/*") }, colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White), shape = RoundedCornerShape(14.dp)) { Text("Images → PDF") }
+                        }
+                    }
+                }
+                Card(shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = Color.White), modifier = Modifier.fillMaxWidth()) {
+                    Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Box(Modifier.size(44.dp).background(Color(0xFFE6F7F4), RoundedCornerShape(14.dp)), contentAlignment = Alignment.Center) {
+                            Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = Accent)
+                        }
+                        Column(Modifier.weight(1f)) {
+                            Text(if (selectedPdf != null) "PDF ready to work" else "Quick workspace", fontWeight = FontWeight.Bold, color = Ink)
+                            Text(if (selectedPdf != null) "$pdfPageCount pages • Choose a tool below" else "Open a PDF or choose images to get started", color = Color(0xFF6B7280), style = MaterialTheme.typography.bodySmall)
                         }
                     }
                 }
 
-                Text("Image tools", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Ink)
+                Text("Create & scan", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.ExtraBold, color = Ink)
                 ToolCard("Images → PDF", if (selectedImages.isEmpty()) "Select one or more images to create a multi-page PDF." else "${selectedImages.size} image(s) selected.",
                     { Icon(Icons.Default.Image, null, tint = Violet) }, "Choose images", !busy) { imagePicker.launch("image/*") }
                 ToolCard("Create PDF", "Put each selected image on its own A4-sized page.",
@@ -172,7 +184,7 @@ private fun AnikaPdfApp() {
                 ToolCard("OCR from image", "Recognize Hindi/Devanagari and English printed text and some handwriting.",
                     { Icon(Icons.Default.TextFields, null, tint = Violet) }, "Select image", !busy) { singleImagePicker.launch("image/*") }
 
-                Text("PDF tools", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Ink)
+                Text("PDF tools", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.ExtraBold, color = Ink)
                 ToolCard("Merge PDFs", if (selectedPdfs.isEmpty()) "Choose multiple PDFs to combine them into one file." else "${selectedPdfs.size} PDF file(s) selected.",
                     { Icon(Icons.Default.Description, null, tint = Violet) }, "Choose PDFs", !busy) { multiPdfPicker.launch("application/pdf") }
                 ToolCard("Create merged PDF", "Combine selected PDFs in order. Pages are rasterized, so the merged file may not retain selectable text or original vectors.",
@@ -229,9 +241,9 @@ private fun AnikaPdfApp() {
                             pagePreview = preview
                         }
                     }
-                    Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(18.dp)) {
+                    Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(22.dp)) {
                         Column(Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("Page preview", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Ink)
+                            Text("Document preview", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.ExtraBold, color = Ink)
                             Spacer(Modifier.height(8.dp))
                             pagePreview?.let { preview ->
                                 Image(bitmap = preview.asImageBitmap(), contentDescription = "PDF page preview",
