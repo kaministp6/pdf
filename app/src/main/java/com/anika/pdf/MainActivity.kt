@@ -230,6 +230,34 @@ private fun AnikaPdfApp() {
                 ToolCard("Open PDF", if (selectedPdf == null) "Open a PDF and see how many pages it contains." else "Opened PDF: $pdfPageCount page(s).",
                     { Icon(Icons.Default.Description, null, tint = Violet) }, "Choose PDF", !busy) { pdfPicker.launch("application/pdf") }
 
+                ToolCard("Convert PDF to PNG images", "Export every page of your open PDF as a high-quality PNG image in Downloads.",
+                    { Icon(Icons.Default.Image, null, tint = Violet) }, "Convert pages", selectedPdf != null && pdfPageCount > 0 && !busy) {
+                    val uri = selectedPdf
+                    if (uri != null) {
+                        busy = true
+                        scope.launch {
+                            try {
+                                var saved = 0
+                                for (index in 0 until pdfPageCount) {
+                                    status = "Converting page ${index + 1} of $pdfPageCount…"
+                                    val bitmap = withContext(Dispatchers.IO) { renderPdfPage(context, uri, index) }
+                                    try {
+                                        withContext(Dispatchers.IO) {
+                                            context.saveBitmapAsPng(bitmap, "ANIKA_CONVERTED_${String.format(Locale.US, "%03d", index + 1)}_${timestamp()}.png")
+                                        }
+                                        saved++
+                                    } finally {
+                                        if (!bitmap.isRecycled) bitmap.recycle()
+                                    }
+                                }
+                                status = "Conversion complete: $saved PNG image(s) saved in Downloads."
+                            } catch (e: Exception) {
+                                status = "Conversion failed: ${e.localizedMessage ?: "unknown error"}"
+                            } finally { busy = false }
+                        }
+                    }
+                }
+
                 if (selectedPdf != null && pdfPageCount > 0) {
                     LaunchedEffect(selectedPdf, pageToOcr) {
                         val uri = selectedPdf
