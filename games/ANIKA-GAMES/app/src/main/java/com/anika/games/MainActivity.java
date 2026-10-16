@@ -7,7 +7,8 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
 public class MainActivity extends Activity {
-    @Override public void onCreate(Bundle savedInstanceState) {
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         WebView web = new WebView(this);
         WebSettings settings = web.getSettings();
@@ -16,9 +17,5 @@ public class MainActivity extends Activity {
         web.setWebViewClient(new WebViewClient());
         setContentView(web);
         web.loadUrl("file:///android_asset/index.html");
-    }
-    @Override public void onBackPressed() {
-        WebView web = findViewById(android.R.id.content).findViewById(0);
-        super.onBackPressed();
     }
 }
