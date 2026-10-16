@@ -67,410 +67,299 @@ class MainActivity : ComponentActivity() {
 private fun AnikaPdfApp() {
     val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
-    var selectedImages by remember { mutableStateOf<List<Uri>>(emptyList()) }
-    var selectedPdfs by remember { mutableStateOf<List<Uri>>(emptyList()) }
     var selectedPdf by remember { mutableStateOf<Uri?>(null) }
-    var ocrText by remember { mutableStateOf("") }
-    var status by remember { mutableStateOf("Welcome to ANIKA PDF.") }
+    var status by remember { mutableStateOf("Open a PDF to start editing.") }
     var busy by remember { mutableStateOf(false) }
     var pdfPageCount by remember { mutableIntStateOf(0) }
-    var pageToOcr by remember { mutableIntStateOf(0) }
-    var outputImageUri by remember { mutableStateOf<Uri?>(null) }
+    var pageIndex by remember { mutableIntStateOf(0) }
     var pagePreview by remember { mutableStateOf<Bitmap?>(null) }
-    var overlayText by remember { mutableStateOf("") }
+    var addText by remember { mutableStateOf("") }
     var findText by remember { mutableStateOf("") }
     var replaceText by remember { mutableStateOf("") }
 
-    val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
-        if (uris.isNotEmpty()) { selectedImages = uris; status = "${uris.size} image(s) selected." }
-    }
-    val singleImagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        if (uri != null) {
-            busy = true; status = "Recognizing image text…"
-            scope.launch {
-                try {
-                    val bitmap = withContext(Dispatchers.IO) {
-                        context.contentResolver.openInputStream(uri).use { input ->
-                            requireNotNull(input) { "Could not open image." }
-                            BitmapFactory.decodeStream(input)
-                        }
-                    } ?: error("Unsupported or damaged image.")
-                    ocrText = recognizeText(bitmap)
-                    bitmap.recycle()
-                    status = if (ocrText.isBlank()) "No text detected. Try a clearer image." else "OCR complete. Review the result below."
-                } catch (e: Exception) { status = "OCR failed: ${e.localizedMessage ?: "unknown error"}" }
-                finally { busy = false }
-            }
-        }
-    }
-    val multiPdfPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
-        if (uris.isNotEmpty()) {
-            selectedPdfs = uris
-            status = "${uris.size} PDF file(s) selected for merging."
-        }
-    }
     val pdfPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) {
-            selectedPdf = uri; busy = true; status = "Reading PDF…"
+            selectedPdf = uri
+            busy = true
+            status = "Opening your PDF…"
             scope.launch {
                 try {
                     pdfPageCount = withContext(Dispatchers.IO) { getPdfPageCount(context, uri) }
-                    pageToOcr = 0
-                    status = "PDF opened: $pdfPageCount page(s)."
-                } catch (e: Exception) { selectedPdf = null; pdfPageCount = 0; status = "Could not open PDF: ${e.localizedMessage ?: "unknown error"}" }
-                finally { busy = false }
+                    pageIndex = 0
+                    status = "PDF opened • $pdfPageCount page(s)"
+                } catch (e: Exception) {
+                    selectedPdf = null
+                    pdfPageCount = 0
+                    status = "Could not open PDF: ${e.localizedMessage ?: "Unknown error"}"
+                } finally { busy = false }
             }
         }
     }
 
     androidx.compose.runtime.DisposableEffect(Unit) {
-        onDispose {
+        onDispose { pagePreview?.let { if (!it.isRecycled) it.recycle() } }
+    }
+
+    LaunchedEffect(selectedPdf, pageIndex) {
+        val uri = selectedPdf
+        if (uri != null && pdfPageCount > 0) {
+            val preview = withContext(Dispatchers.IO) {
+                runCatching { renderPdfPage(context, uri, pageIndex) }.getOrNull()
+            }
             pagePreview?.let { if (!it.isRecycled) it.recycle() }
+            pagePreview = preview
+        } else {
+            pagePreview?.let { if (!it.isRecycled) it.recycle() }
+            pagePreview = null
         }
     }
 
-    MaterialTheme(colorScheme = lightColorScheme(primary = Violet, secondary = Accent, background = Pale, surface = Color.White)) {
+    MaterialTheme(
+        colorScheme = lightColorScheme(primary = Violet, secondary = Accent, background = Pale, surface = Color.White)
+    ) {
         Scaffold(
             topBar = {
-                TopAppBar(title = {
-                    Column {
-                        Text("ANIKA PDF", fontWeight = FontWeight.ExtraBold, color = Ink)
-                        Text("PDF • EDIT • CONVERT", style = MaterialTheme.typography.labelSmall, color = Violet, fontWeight = FontWeight.Bold)
-                    }
-                }, colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.White))
+                TopAppBar(
+                    title = {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(11.dp)) {
+                            Box(
+                                Modifier.size(42.dp).background(
+                                    androidx.compose.ui.graphics.Brush.linearGradient(listOf(Violet, Accent)),
+                                    RoundedCornerShape(14.dp)
+                                ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text("A", color = Color.White, fontWeight = FontWeight.Black, style = MaterialTheme.typography.headlineSmall)
+                            }
+                            Column {
+                                Text("ANIKA PDF", fontWeight = FontWeight.ExtraBold, color = Ink)
+                                Text("PDF EDITOR", style = MaterialTheme.typography.labelSmall, color = Violet, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.White)
+                )
             },
             containerColor = Pale
         ) { padding ->
             Column(
-                Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp)
+                Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                Card(shape = RoundedCornerShape(28.dp), colors = CardDefaults.cardColors(containerColor = Violet), modifier = Modifier.fillMaxWidth()) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(26.dp),
+                    colors = CardDefaults.cardColors(containerColor = Violet),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+                ) {
                     Column(Modifier.padding(22.dp)) {
-                        Text("Your documents.\nUnder your control.", color = Color.White, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.ExtraBold)
-                        Spacer(Modifier.height(8.dp))
-                        Text("Create, organize and convert PDFs with Hindi & English OCR.", color = Color(0xFFE8ECFF), style = MaterialTheme.typography.bodyLarge)
+                        Text("Your PDF. Your workspace.", color = Color.White, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.ExtraBold)
+                        Spacer(Modifier.height(7.dp))
+                        Text(
+                            "Open, review and edit documents in one clean workspace.",
+                            color = Color(0xFFE7ECFF),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
                         Spacer(Modifier.height(18.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Button(onClick = { pdfPicker.launch("application/pdf") }, colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Violet), shape = RoundedCornerShape(14.dp)) { Text("＋ Open PDF", fontWeight = FontWeight.Bold) }
-                            OutlinedButton(onClick = { imagePicker.launch("image/*") }, colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White), shape = RoundedCornerShape(14.dp)) { Text("Images → PDF") }
-                        }
-                    }
-                }
-                Card(shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = Color.White), modifier = Modifier.fillMaxWidth()) {
-                    Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Box(Modifier.size(44.dp).background(Color(0xFFE6F7F4), RoundedCornerShape(14.dp)), contentAlignment = Alignment.Center) {
-                            Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = Accent)
-                        }
-                        Column(Modifier.weight(1f)) {
-                            Text(if (selectedPdf != null) "PDF ready to work" else "Quick workspace", fontWeight = FontWeight.Bold, color = Ink)
-                            Text(if (selectedPdf != null) "$pdfPageCount pages • Choose a tool below" else "Open a PDF or choose images to get started", color = Color(0xFF6B7280), style = MaterialTheme.typography.bodySmall)
-                        }
+                        Button(
+                            onClick = { pdfPicker.launch("application/pdf") },
+                            modifier = Modifier.fillMaxWidth().height(52.dp),
+                            shape = RoundedCornerShape(15.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Violet)
+                        ) { Text(if (selectedPdf == null) "＋  Open PDF document" else "Open another PDF", fontWeight = FontWeight.Bold) }
                     }
                 }
 
-                Text("Create & scan", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.ExtraBold, color = Ink)
-                ToolCard("Images → PDF", if (selectedImages.isEmpty()) "Select one or more images to create a multi-page PDF." else "${selectedImages.size} image(s) selected.",
-                    { Icon(Icons.Default.Image, null, tint = Violet) }, "Choose images", !busy) { imagePicker.launch("image/*") }
-                ToolCard("Create PDF", "Put each selected image on its own A4-sized page.",
-                    { Icon(Icons.Default.Description, null, tint = Violet) }, "Create PDF", selectedImages.isNotEmpty() && !busy) {
-                    busy = true; status = "Creating PDF…"
-                    scope.launch {
-                        try {
-                            val name = withContext(Dispatchers.IO) { context.createPdfFromImages(selectedImages) }
-                            status = "PDF saved to Downloads/$name"
-                        } catch (e: Exception) { status = "PDF creation failed: ${e.localizedMessage ?: "unknown error"}" }
-                        finally { busy = false }
-                    }
-                }
-                ToolCard("OCR from image", "Recognize Hindi/Devanagari and English printed text and some handwriting.",
-                    { Icon(Icons.Default.TextFields, null, tint = Violet) }, "Select image", !busy) { singleImagePicker.launch("image/*") }
-
-                Text("PDF tools", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.ExtraBold, color = Ink)
-                ToolCard("Merge PDFs", if (selectedPdfs.isEmpty()) "Choose multiple PDFs to combine them into one file." else "${selectedPdfs.size} PDF file(s) selected.",
-                    { Icon(Icons.Default.Description, null, tint = Violet) }, "Choose PDFs", !busy) { multiPdfPicker.launch("application/pdf") }
-                ToolCard("Create merged PDF", "Combine selected PDFs in order. Pages are rasterized, so the merged file may not retain selectable text or original vectors.",
-                    { Icon(Icons.Default.AutoAwesome, null, tint = Violet) }, "Merge selected PDFs", selectedPdfs.size >= 2 && !busy) {
-                    busy = true; status = "Merging PDFs…"
-                    scope.launch {
-                        try {
-                            val name = withContext(Dispatchers.IO) { context.mergePdfsAsPages(selectedPdfs) }
-                            status = "Merged PDF saved to Downloads/$name"
-                            selectedPdfs = emptyList()
-                        } catch (e: Exception) { status = "Merge failed: ${e.localizedMessage ?: "unknown error"}" }
-                        finally { busy = false }
-                    }
-                }
-                ToolCard("Compress PDF (rasterized)", "Create a smaller image-based copy of the selected PDF. Text may no longer be selectable; keep the original.",
-                    { Icon(Icons.Default.Description, null, tint = Violet) }, "Compress selected PDF", selectedPdf != null && !busy) {
-                    val uri = selectedPdf
-                    if (uri != null) {
-                        busy = true; status = "Creating compressed copy…"
-                        scope.launch {
-                            try {
-                                val name = withContext(Dispatchers.IO) { context.rasterizePdf(uri, 1.25f, "ANIKA_COMPRESSED") }
-                                status = "Compressed copy saved to Downloads/$name"
-                            } catch (e: Exception) { status = "Compression failed: ${e.localizedMessage ?: "unknown error"}" }
-                            finally { busy = false }
+                if (selectedPdf == null) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(24.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color.White)
+                    ) {
+                        Column(
+                            Modifier.fillMaxWidth().padding(vertical = 34.dp, horizontal = 22.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Box(
+                                Modifier.size(76.dp).background(Color(0xFFE9EEFF), RoundedCornerShape(24.dp)),
+                                contentAlignment = Alignment.Center
+                            ) { Icon(Icons.Default.Description, contentDescription = null, tint = Violet, modifier = Modifier.size(38.dp)) }
+                            Spacer(Modifier.height(16.dp))
+                            Text("Ready to edit?", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.ExtraBold, color = Ink)
+                            Spacer(Modifier.height(6.dp))
+                            Text("Choose a PDF from your phone to open the editor.", color = Color(0xFF687386))
+                            Spacer(Modifier.height(16.dp))
+                            OutlinedButton(
+                                onClick = { pdfPicker.launch("application/pdf") },
+                                shape = RoundedCornerShape(13.dp)
+                            ) { Text("Browse PDF files") }
                         }
                     }
-                }
-                ToolCard("Split PDF into pages", "Save each page of the selected PDF as a separate one-page PDF file. Output pages are image-based.",
-                    { Icon(Icons.Default.Description, null, tint = Violet) }, "Split into separate PDFs", selectedPdf != null && !busy) {
-                    val uri = selectedPdf
-                    if (uri != null) {
-                        busy = true; status = "Splitting PDF into separate pages…"
-                        scope.launch {
-                            try {
-                                val count = withContext(Dispatchers.IO) { context.splitPdfIntoPages(uri) }
-                                status = "Split complete: $count one-page PDF file(s) saved to Downloads."
-                            } catch (e: Exception) { status = "Split failed: ${e.localizedMessage ?: "unknown error"}" }
-                            finally { busy = false }
-                        }
-                    }
-                }
-                ToolCard("Open PDF", if (selectedPdf == null) "Open a PDF and see how many pages it contains." else "Opened PDF: $pdfPageCount page(s).",
-                    { Icon(Icons.Default.Description, null, tint = Violet) }, "Choose PDF", !busy) { pdfPicker.launch("application/pdf") }
-
-                ToolCard("Convert PDF to PNG images", "Export every page of your open PDF as a high-quality PNG image in Downloads.",
-                    { Icon(Icons.Default.Image, null, tint = Violet) }, "Convert pages", selectedPdf != null && pdfPageCount > 0 && !busy) {
-                    val uri = selectedPdf
-                    if (uri != null) {
-                        busy = true
-                        scope.launch {
-                            try {
-                                var saved = 0
-                                for (index in 0 until pdfPageCount) {
-                                    status = "Converting page ${index + 1} of $pdfPageCount…"
-                                    val bitmap = withContext(Dispatchers.IO) { renderPdfPage(context, uri, index) }
-                                    try {
-                                        withContext(Dispatchers.IO) {
-                                            context.saveBitmapAsPng(bitmap, "ANIKA_CONVERTED_${String.format(Locale.US, "%03d", index + 1)}_${timestamp()}.png")
-                                        }
-                                        saved++
-                                    } finally {
-                                        if (!bitmap.isRecycled) bitmap.recycle()
-                                    }
+                } else {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(22.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color.White)
+                    ) {
+                        Column(Modifier.padding(14.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Column(Modifier.weight(1f)) {
+                                    Text("DOCUMENT PREVIEW", style = MaterialTheme.typography.labelMedium, color = Violet, fontWeight = FontWeight.Bold)
+                                    Text("Page ${pageIndex + 1} of $pdfPageCount", style = MaterialTheme.typography.titleMedium, color = Ink, fontWeight = FontWeight.Bold)
                                 }
-                                status = "Conversion complete: $saved PNG image(s) saved in Downloads."
-                            } catch (e: Exception) {
-                                status = "Conversion failed: ${e.localizedMessage ?: "unknown error"}"
-                            } finally { busy = false }
+                                Surface(color = Color(0xFFE6F7F4), shape = RoundedCornerShape(10.dp)) {
+                                    Text("PDF OPEN", Modifier.padding(horizontal = 10.dp, vertical = 6.dp), color = Color(0xFF087F74), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                            Spacer(Modifier.height(12.dp))
+                            Box(
+                                Modifier.fillMaxWidth().heightIn(min = 280.dp, max = 520.dp)
+                                    .background(Color(0xFFF0F2F7), RoundedCornerShape(14.dp)).padding(8.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                pagePreview?.let { bitmap ->
+                                    Image(
+                                        bitmap = bitmap.asImageBitmap(),
+                                        contentDescription = "PDF page preview",
+                                        modifier = Modifier.fillMaxWidth().heightIn(max = 490.dp),
+                                        contentScale = ContentScale.Fit
+                                    )
+                                } ?: CircularProgressIndicator(color = Violet)
+                            }
+                            Spacer(Modifier.height(12.dp))
+                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                OutlinedButton(
+                                    onClick = { if (pageIndex > 0) pageIndex-- },
+                                    enabled = pageIndex > 0 && !busy,
+                                    modifier = Modifier.weight(1f),
+                                    shape = RoundedCornerShape(12.dp)
+                                ) { Text("‹  Previous") }
+                                Button(
+                                    onClick = { if (pageIndex < pdfPageCount - 1) pageIndex++ },
+                                    enabled = pageIndex < pdfPageCount - 1 && !busy,
+                                    modifier = Modifier.weight(1f),
+                                    shape = RoundedCornerShape(12.dp)
+                                ) { Text("Next  ›") }
+                            }
                         }
                     }
-                }
 
-                if (selectedPdf != null && pdfPageCount > 0) {
-                    LaunchedEffect(selectedPdf, pageToOcr) {
-                        val uri = selectedPdf
-                        if (uri != null) {
-                            val preview = withContext(Dispatchers.IO) {
-                                runCatching { renderPdfPage(context, uri, pageToOcr) }.getOrNull()
-                            }
-                            pagePreview?.let { if (!it.isRecycled) it.recycle() }
-                            pagePreview = preview
-                        }
-                    }
-                    Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(22.dp)) {
-                        Column(Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("Document preview", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.ExtraBold, color = Ink)
-                            Spacer(Modifier.height(8.dp))
-                            pagePreview?.let { preview ->
-                                Image(bitmap = preview.asImageBitmap(), contentDescription = "PDF page preview",
-                                    modifier = Modifier.fillMaxWidth().heightIn(max = 360.dp), contentScale = ContentScale.Fit)
-                            } ?: Text("Preview loading…", color = Ink)
-                        }
-                    }
-                    Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(18.dp)) {
-                        Column(Modifier.padding(16.dp)) {
-                            Text("Page actions", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Ink)
-                            Text("Page ${pageToOcr + 1} of $pdfPageCount")
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                OutlinedButton(onClick = { if (pageToOcr > 0) pageToOcr-- }, enabled = pageToOcr > 0 && !busy, modifier = Modifier.weight(1f)) { Text("Previous") }
-                                OutlinedButton(onClick = { if (pageToOcr < pdfPageCount - 1) pageToOcr++ }, enabled = pageToOcr < pdfPageCount - 1 && !busy, modifier = Modifier.weight(1f)) { Text("Next") }
-                            }
-                            Text("Replace existing text (OCR-based)", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Ink)
-                            Text("Find text on this page, cover its detected area and draw replacement text. Best for clear printed text; output becomes image-based and font matching is approximate.", style = MaterialTheme.typography.bodySmall, color = Color(0xFF666477))
-                            OutlinedTextField(value = findText, onValueChange = { findText = it }, modifier = Modifier.fillMaxWidth(), label = { Text("Existing text to find") }, singleLine = true)
-                            OutlinedTextField(value = replaceText, onValueChange = { replaceText = it }, modifier = Modifier.fillMaxWidth(), label = { Text("Replacement text (Hindi / English)") }, minLines = 1)
-                            Button(onClick = {
-                                val uri = selectedPdf!!
-                                val pageIndex = pageToOcr
-                                val old = findText.trim()
-                                val replacement = replaceText
-                                if (old.isBlank() || replacement.isBlank()) {
-                                    status = "Enter both the existing text and replacement text."
-                                } else {
-                                    busy = true; status = "Finding text and creating edited copy…"
-                                    scope.launch {
-                                        try {
-                                            val result = withContext(Dispatchers.IO) { context.replaceTextByOcr(uri, pageIndex, old, replacement) }
-                                            status = result
-                                        } catch (e: Exception) {
-                                            status = "Text replacement failed: ${e.localizedMessage ?: "unknown error"}"
-                                        } finally { busy = false }
-                                    }
-                                }
-                            }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("Replace text and save edited PDF") }
-                            OutlinedTextField(
-                                value = overlayText,
-                                onValueChange = { overlayText = it },
-                                modifier = Modifier.fillMaxWidth(),
-                                label = { Text("Text to add on this page") },
-                                placeholder = { Text("Type Hindi or English text…") },
-                                minLines = 2,
-                                shape = RoundedCornerShape(12.dp)
-                            )
-                            Button(onClick = {
-                                val uri = selectedPdf!!
-                                val pageIndex = pageToOcr
-                                val text = overlayText.trim()
-                                if (text.isBlank()) {
-                                    status = "Please enter text to add."
-                                } else {
-                                    busy = true; status = "Creating a copy with text overlay…"
-                                    scope.launch {
-                                        try {
-                                            val name = withContext(Dispatchers.IO) {
-                                                context.exportPdfWithTextOverlay(uri, pageIndex, text)
-                                            }
-                                            status = "Text-overlay copy saved to Downloads/$name. Original PDF unchanged."
-                                        } catch (e: Exception) {
-                                            status = "Text overlay failed: ${e.localizedMessage ?: "unknown error"}"
-                                        } finally { busy = false }
-                                    }
-                                }
-                            }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
-                                Text("Add text to this page and save a copy")
-                            }
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(22.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color.White)
+                    ) {
+                        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Text("EDIT PDF", style = MaterialTheme.typography.labelMedium, color = Violet, fontWeight = FontWeight.Bold)
+                            Text("Replace existing text", style = MaterialTheme.typography.titleLarge, color = Ink, fontWeight = FontWeight.ExtraBold)
                             Text(
-                                "Note: this adds new text over the selected page; it does not replace existing PDF text. The output is image-based.",
-                                style = MaterialTheme.typography.bodySmall, color = Color(0xFF666477)
+                                "Find printed text on the current page and replace it. Hindi and English are supported; review the saved copy carefully.",
+                                style = MaterialTheme.typography.bodySmall, color = Color(0xFF687386)
                             )
-                            Button(onClick = {
-                                val uri = selectedPdf!!; val index = pageToOcr
-                                busy = true; status = "Rendering PDF page…"
-                                scope.launch {
-                                    try {
-                                        val bitmap = withContext(Dispatchers.IO) { renderPdfPage(context, uri, index) }
-                                        ocrText = recognizeText(bitmap); bitmap.recycle()
-                                        status = "Page ${index + 1} OCR complete. Review and correct the text."
-                                    } catch (e: Exception) { status = "OCR failed: ${e.localizedMessage ?: "unknown error"}" }
-                                    finally { busy = false }
-                                }
-                            }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("Recognize text on this page") }
-                            OutlinedButton(onClick = {
-                                val uri = selectedPdf!!
-                                val pageCount = pdfPageCount
-                                busy = true; status = "Exporting all $pageCount pages as PNG…"
-                                scope.launch {
-                                    try {
-                                        var saved = 0
-                                        for (index in 0 until pageCount) {
-                                            status = "Exporting page ${index + 1} of $pageCount…"
-                                            val bitmap = withContext(Dispatchers.IO) { renderPdfPage(context, uri, index) }
+                            OutlinedTextField(
+                                value = findText, onValueChange = { findText = it },
+                                modifier = Modifier.fillMaxWidth(), label = { Text("Text to find") }, singleLine = true,
+                                shape = RoundedCornerShape(13.dp)
+                            )
+                            OutlinedTextField(
+                                value = replaceText, onValueChange = { replaceText = it },
+                                modifier = Modifier.fillMaxWidth(), label = { Text("Replace with") },
+                                shape = RoundedCornerShape(13.dp)
+                            )
+                            Button(
+                                onClick = {
+                                    val uri = selectedPdf!!
+                                    val old = findText.trim()
+                                    val replacementText = replaceText
+                                    if (old.isBlank() || replacementText.isBlank()) {
+                                        status = "Enter the text to find and its replacement."
+                                    } else {
+                                        busy = true
+                                        status = "Editing PDF page…"
+                                        scope.launch {
                                             try {
-                                                val fileName = withContext(Dispatchers.IO) {
-                                                    context.saveBitmapAsPng(bitmap, "ANIKA_PAGE_${String.format(Locale.US, "%03d", index + 1)}_${timestamp()}.png")
+                                                status = withContext(Dispatchers.IO) {
+                                                    context.replaceTextByOcr(uri, pageIndex, old, replacementText)
                                                 }
-                                                saved++
-                                            } finally {
-                                                if (!bitmap.isRecycled) bitmap.recycle()
-                                            }
+                                            } catch (e: Exception) {
+                                                status = "Could not replace text: ${e.localizedMessage ?: "Unknown error"}"
+                                            } finally { busy = false }
                                         }
-                                        status = "Export complete: $saved PNG file(s) saved to Downloads."
-                                    } catch (e: Exception) {
-                                        status = "Export all pages failed: ${e.localizedMessage ?: "unknown error"}"
-                                    } finally { busy = false }
-                                }
-                            }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("Export all pages as PNG") }
-                            Button(onClick = {
-                                val uri = selectedPdf!!
-                                val pageCount = pdfPageCount
-                                busy = true; status = "Starting OCR for all $pageCount pages…"
-                                scope.launch {
-                                    try {
-                                        val fullText = buildString {
-                                            for (index in 0 until pageCount) {
-                                                status = "Recognizing page ${index + 1} of $pageCount…"
-                                                val bitmap = withContext(Dispatchers.IO) { renderPdfPage(context, uri, index) }
-                                                val pageText = try { recognizeText(bitmap) } finally { if (!bitmap.isRecycled) bitmap.recycle() }
-                                                appendLine("========== PAGE ${index + 1} ==========")
-                                                appendLine(pageText.ifBlank { "[No text detected on this page]" })
-                                                appendLine()
-                                            }
+                                    }
+                                },
+                                enabled = !busy,
+                                modifier = Modifier.fillMaxWidth().height(50.dp),
+                                shape = RoundedCornerShape(13.dp)
+                            ) { Text("Replace text & save copy", fontWeight = FontWeight.Bold) }
+
+                            HorizontalDivider(color = Color(0xFFE8EBF2))
+                            Text("Add text to page", style = MaterialTheme.typography.titleMedium, color = Ink, fontWeight = FontWeight.Bold)
+                            OutlinedTextField(
+                                value = addText, onValueChange = { addText = it },
+                                modifier = Modifier.fillMaxWidth(), label = { Text("Type Hindi or English text") },
+                                minLines = 2, shape = RoundedCornerShape(13.dp)
+                            )
+                            OutlinedButton(
+                                onClick = {
+                                    val uri = selectedPdf!!
+                                    val textToAdd = addText.trim()
+                                    if (textToAdd.isBlank()) {
+                                        status = "Type the text you want to add."
+                                    } else {
+                                        busy = true
+                                        status = "Adding text to a copy…"
+                                        scope.launch {
+                                            try {
+                                                val name = withContext(Dispatchers.IO) {
+                                                    context.exportPdfWithTextOverlay(uri, pageIndex, textToAdd)
+                                                }
+                                                status = "Saved to Downloads/$name"
+                                            } catch (e: Exception) {
+                                                status = "Could not add text: ${e.localizedMessage ?: "Unknown error"}"
+                                            } finally { busy = false }
                                         }
-                                        ocrText = fullText
-                                        val name = withContext(Dispatchers.IO) { context.saveTextFile(fullText) }
-                                        status = "All $pageCount pages processed. Full OCR text saved to Downloads/$name"
-                                    } catch (e: Exception) {
-                                        status = "Full-document OCR failed: ${e.localizedMessage ?: "unknown error"}"
-                                    } finally { busy = false }
-                                }
-                            }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("OCR all pages and export TXT") }
-                            Button(onClick = {
-                                val uri = selectedPdf!!
-                                busy = true; status = "Rendering current page as PNG…"
-                                scope.launch {
-                                    try {
-                                        val bitmap = withContext(Dispatchers.IO) { renderPdfPage(context, uri, pageToOcr) }
-                                        val name = withContext(Dispatchers.IO) { context.saveBitmapAsPng(bitmap) }
-                                        bitmap.recycle()
-                                        status = "Current page exported to Downloads/$name"
-                                    } catch (e: Exception) { status = "Page export failed: ${e.localizedMessage ?: "unknown error"}" }
-                                    finally { busy = false }
-                                }
-                            }, enabled = !busy, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.outlinedButtonColors()) { Text("Export this page as PNG") }
+                                    }
+                                },
+                                enabled = !busy,
+                                modifier = Modifier.fillMaxWidth().height(48.dp),
+                                shape = RoundedCornerShape(13.dp)
+                            ) { Text("Add text & save copy") }
+                            Text(
+                                "Note: text replacement and added text are image-based edits. Original font, selectable text and complex layouts may not be preserved exactly.",
+                                style = MaterialTheme.typography.bodySmall, color = Color(0xFF7A8494)
+                            )
                         }
                     }
                 }
 
-                Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(18.dp)) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(18.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color.White)
+                ) {
                     Column(Modifier.padding(16.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.AutoAwesome, null, tint = Violet); Spacer(Modifier.width(8.dp))
-                            Text("Status", fontWeight = FontWeight.Bold, color = Ink)
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                            Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = Accent)
+                            Text("Editor status", fontWeight = FontWeight.Bold, color = Ink)
                         }
-                        Spacer(Modifier.height(6.dp)); Text(status, color = Ink)
-                        if (busy) { Spacer(Modifier.height(10.dp)); LinearProgressIndicator(Modifier.fillMaxWidth()) }
+                        Spacer(Modifier.height(8.dp))
+                        Text(status, color = Ink)
+                        if (busy) {
+                            Spacer(Modifier.height(10.dp))
+                            LinearProgressIndicator(Modifier.fillMaxWidth())
+                        }
                     }
                 }
-
-                if (ocrText.isNotBlank()) {
-                    Text("Recognized text — review before use", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Ink)
-                    OutlinedTextField(value = ocrText, onValueChange = { ocrText = it }, modifier = Modifier.fillMaxWidth().heightIn(min = 180.dp),
-                        label = { Text("Editable OCR result") }, shape = RoundedCornerShape(16.dp))
-                    Button(onClick = {
-                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("ANIKA PDF OCR", ocrText)); status = "Text copied to clipboard."
-                    }, modifier = Modifier.fillMaxWidth()) { Text("Copy text") }
-                    OutlinedButton(onClick = {
-                        scope.launch {
-                            try { val name = withContext(Dispatchers.IO) { context.saveTextFile(ocrText) }; status = "Text saved to Downloads/$name" }
-                            catch (e: Exception) { status = "Text export failed: ${e.localizedMessage ?: "unknown error"}" }
-                        }
-                    }, modifier = Modifier.fillMaxWidth()) { Text("Export OCR as TXT") }
-                    OutlinedButton(onClick = {
-                        val textToExport = ocrText
-                        busy = true
-                        scope.launch {
-                            try {
-                                val name = withContext(Dispatchers.IO) { context.saveTextAsPdf(textToExport) }
-                                status = "OCR text PDF saved to Downloads/$name"
-                            } catch (e: Exception) {
-                                status = "Text PDF export failed: ${e.localizedMessage ?: "unknown error"}"
-                            } finally { busy = false }
-                        }
-                    }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("Export OCR text as PDF") }
-                }
-
-                Text("Existing-text replacement is OCR-based and image-based; exact original font, selectable text, complex backgrounds and layout cannot be guaranteed. OCR may make mistakes; inspect the saved copy. This is not native PDF text-object editing.",
-                    style = MaterialTheme.typography.bodySmall, color = Color(0xFF666477))
+                Text(
+                    "ANIKA PDF • A focused PDF editing workspace",
+                    modifier = Modifier.fillMaxWidth(),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color(0xFF8A93A3)
+                )
             }
         }
     }
 }
-
 @Composable
 private fun ToolCard(title: String, description: String, icon: @Composable () -> Unit, button: String, enabled: Boolean, onClick: () -> Unit) {
     Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = Color.White),
